@@ -13,6 +13,8 @@
 #define BACKWARD_HAS_DW 1
 #include <backward.hpp>
 
+#include <spdlog/spdlog.h>
+
 
 // check some assumptions made while programming
 static_assert(sizeof(cl_float) == sizeof(float), "sizeof(cl_float) == sizeof(float)");
@@ -65,6 +67,11 @@ cl::Program buildProgramFromFile(const std::string& fname, const cl::Context& co
 }
 
 int main() {
+    // set up logging
+    auto log = spdlog::stdout_logger_mt("s2015ocl");
+    log->set_level(spdlog::level::debug);
+    log->info() << "s2015ocl booting";
+
     // config
     std::size_t n = 16;
     std::size_t m = 4;
@@ -72,39 +79,46 @@ int main() {
 
     // host storage
     // place data on heap to avoid stack overflows
-    std::cout << "Allocate host memory ..." << std::flush;
+    log->info() << "allocate host memory";
     std::vector<float> hState(n * n * m, 0.f);
     std::vector<float> hRules(9 * m, 0.f);
     std::vector<float> hFrequencies(m, 0.f);
-    std::cout << "OK" << std::endl;
 
 
-    std::cout << "Set up OpenCL..." << std::flush;
+    log->info() << "set up OpenCL";
 
+    log->debug() << "get platform data";
     std::vector<cl::Platform> platforms;
     cl::Platform::get(&platforms);
     if (platforms.empty()) {
-        std::cout << "no platforms found" << std::endl;
+        log->error() << "no platforms found";
         return EXIT_FAILURE;
     }
 
+    log->debug() << "get device data";
     std::vector<cl::Device> devices;
     platforms[0].getDevices(CL_DEVICE_TYPE_ALL, &devices);
     if (devices.empty()) {
-        std::cout << "no devices found" << std::endl;
+        log->error() << "no devices found";
         return EXIT_FAILURE;
     }
 
+    log->debug() << "create context";
     cl::Context context(devices);
 
+    log->debug() << "build program";
     cl::Program programAutomaton = buildProgramFromFile("automaton.cl", context, devices);
     cl::Kernel kernelAutomaton(programAutomaton, "automaton");
+
+    log->debug() << "allocate buffers";
     cl::Buffer dState(context, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, sizeof(cl_float) * hState.size(), hState.data());
     cl::Buffer dRules(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(cl_float) * hRules.size(), hRules.data());
+
+    log->debug() << "set kernel args";
     kernelAutomaton.setArg(0, dState);
     kernelAutomaton.setArg(1, dRules);
-    std::cout << "OK" << std::endl;
 
 
+    log->info() << "done, goodbye!";
     return EXIT_SUCCESS;
 }
