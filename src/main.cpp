@@ -8,6 +8,8 @@
 #include <vector>
 
 #define CL_HPP_ENABLE_EXCEPTIONS
+#define CL_HPP_MINIMUM_OPENCL_VERSION 120
+#define CL_HPP_TARGET_OPENCL_VERSION 120
 #include <CL/cl2.hpp>
 
 #define BACKWARD_HAS_DW 1
@@ -118,6 +120,12 @@ int main() {
     kernelAutomaton.setArg(0, dState);
     kernelAutomaton.setArg(1, dRules);
 
+    log->debug() << "create command queue";
+    cl::CommandQueue queue(context, devices[0]);
+
+    log->info() << "run kernel";
+    queue.enqueueNDRangeKernel(kernelAutomaton, cl::NullRange, cl::NDRange(n, n, m));
+    queue.finish();
 
     log->info() << "done, goodbye!";
     return EXIT_SUCCESS;
