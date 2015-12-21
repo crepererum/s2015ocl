@@ -3,19 +3,22 @@
 #include <exception>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <streambuf>
 #include <string>
+#include <thread>
 #include <vector>
+
+#define BACKWARD_HAS_DW 1
+#include <backward.hpp>
 
 #define CL_HPP_ENABLE_EXCEPTIONS
 #define CL_HPP_MINIMUM_OPENCL_VERSION 120
 #define CL_HPP_TARGET_OPENCL_VERSION 120
 #include <CL/cl2.hpp>
 
-#define BACKWARD_HAS_DW 1
-#include <backward.hpp>
-
-#include <spdlog/spdlog.h>
+#include "common.hpp"
+#include "gui.hpp"
 
 
 // check some assumptions made while programming
@@ -26,18 +29,6 @@ static_assert(sizeof(cl_float) == sizeof(float), "sizeof(cl_float) == sizeof(flo
 namespace backward {
 backward::SignalHandling sh;
 }
-
-
-class MyException : public std::exception {
-    public:
-        MyException(const std::string& msg) : msg(msg) {}
-        virtual const char* what() const throw() {
-            return msg.c_str();
-        }
-
-    private:
-        std::string msg;
-};
 
 
 cl::Program buildProgramFromFile(const std::string& fname, const cl::Context& context, const std::vector<cl::Device>& devices) {
@@ -70,7 +61,7 @@ cl::Program buildProgramFromFile(const std::string& fname, const cl::Context& co
 
 int main() {
     // set up logging
-    auto log = spdlog::stdout_logger_mt("s2015ocl");
+    auto log = spdlog::stdout_logger_mt("main");
     log->set_level(spdlog::level::debug);
     log->info() << "s2015ocl booting";
 
@@ -123,9 +114,15 @@ int main() {
     log->debug() << "create command queue";
     cl::CommandQueue queue(context, devices[0]);
 
+    log->info() << "spawn GUI thread";
+    std::thread thread_gui(main_gui);
+
     log->info() << "run kernel";
     queue.enqueueNDRangeKernel(kernelAutomaton, cl::NullRange, cl::NDRange(n, n, m));
     queue.finish();
+
+    log->info() << "join threads";
+    thread_gui.join();
 
     log->info() << "done, goodbye!";
     return EXIT_SUCCESS;

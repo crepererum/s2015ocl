@@ -17,7 +17,7 @@ endif ()
 
 # bunch of external projects
 externalproject_add (
-    cmock
+    project_cmock
     PREFIX "${CMAKE_CURRENT_BINARY_DIR}/cmock"
     GIT_REPOSITORY "https://github.com/ThrowTheSwitch/CMock.git"
     GIT_TAG "8dc65e82bf4697a2fdc86f0d45ccad0749028d2d"
@@ -28,7 +28,7 @@ externalproject_add (
 )
 
 externalproject_add (
-    unity
+    project_unity
     PREFIX "${CMAKE_CURRENT_BINARY_DIR}/unity"
     GIT_REPOSITORY "https://github.com/ThrowTheSwitch/Unity.git"
     GIT_TAG "v2.1.0"
@@ -39,7 +39,7 @@ externalproject_add (
 )
 
 externalproject_add (
-    clheaders
+    project_clheaders
     PREFIX "${CMAKE_CURRENT_BINARY_DIR}/clheaders"
     GIT_REPOSITORY "https://github.com/KhronosGroup/OpenCL-Headers"
     GIT_TAG "a501078069186a4a950590382abb926b70114f89"
@@ -50,8 +50,8 @@ externalproject_add (
 )
 
 externalproject_add (
-    clhpp
-    DEPENDS cmock unity clheaders
+    project_clhpp
+    DEPENDS project_cmock project_unity project_clheaders
     PREFIX "${CMAKE_CURRENT_BINARY_DIR}/clhpp"
     GIT_REPOSITORY "https://github.com/KhronosGroup/OpenCL-CLHPP.git"
     GIT_TAG "v2.0.9"
@@ -63,7 +63,7 @@ externalproject_add (
 )
 
 externalproject_add (
-    spdlog
+    project_spdlog
     PREFIX "${CMAKE_CURRENT_BINARY_DIR}/spdlog"
     GIT_REPOSITORY "https://github.com/gabime/spdlog.git"
     GIT_TAG "01f3d6f5f0de7c14ebb24ca579c17e44003a15d7"
@@ -71,11 +71,24 @@ externalproject_add (
 )
 
 externalproject_add (
-    backward
+    project_backward
     PREFIX "${CMAKE_CURRENT_BINARY_DIR}/backward"
     GIT_REPOSITORY "https://github.com/bombela/backward-cpp.git"
     GIT_TAG "v1.0"
     INSTALL_COMMAND ${CMAKE_COMMAND} -E copy <SOURCE_DIR>/backward.hpp <INSTALL_DIR>/include/backward.hpp
+)
+
+externalproject_add (
+    project_nanogui
+    PREFIX "${CMAKE_CURRENT_BINARY_DIR}/nanogui"
+    GIT_REPOSITORY "https://github.com/wjakob/nanogui.git"
+    GIT_TAG "a6480f5b09f0b334ab3dceb79601e6355a7df3ea"
+    CMAKE_ARGS -DCMAKE_INSTALL_PREFIX:PATH=<INSTALL_DIR> -DNANOGUI_BUILD_SHARED=OFF -DNANOGUI_BUILD_EXAMPLE=OFF -DNANOGUI_BUILD_PYTHON=OFF
+    INSTALL_COMMAND
+        ${CMAKE_COMMAND} -E copy_directory <SOURCE_DIR>/include <INSTALL_DIR>/include
+        && ${CMAKE_COMMAND} -E copy_directory <SOURCE_DIR>/ext/eigen/Eigen <INSTALL_DIR>/include/Eigen
+        && ${CMAKE_COMMAND} -E copy <BINARY_DIR>/libnanogui.a <INSTALL_DIR>/lib/libnanogui.a
+    TEST_COMMAND ""
 )
 
 include_directories (
@@ -83,7 +96,12 @@ include_directories (
     "${CMAKE_CURRENT_BINARY_DIR}/backward/include"
     "${CMAKE_CURRENT_BINARY_DIR}/clheaders/include"
     "${CMAKE_CURRENT_BINARY_DIR}/clhpp/include"
+    "${CMAKE_CURRENT_BINARY_DIR}/nanogui/include"
     "${CMAKE_CURRENT_BINARY_DIR}/spdlog/include"
+)
+
+link_directories (
+    "${CMAKE_CURRENT_BINARY_DIR}/nanogui/lib"
 )
 
 include_directories (
@@ -93,5 +111,19 @@ include_directories (
 # main executable
 aux_source_directory ("src" SourceFiles)
 add_executable (s2015ocl ${SourceFiles})
-add_dependencies (s2015ocl backward clhpp spdlog)
-target_link_libraries (s2015ocl dw OpenCL)
+add_dependencies (s2015ocl project_backward project_clhpp project_nanogui project_spdlog)
+target_link_libraries (
+    s2015ocl
+    dl
+    dw
+    GL
+    nanogui
+    OpenCL
+    rt
+    X11
+    Xcursor
+    Xi
+    Xinerama
+    Xrandr
+    Xxf86vm
+)
