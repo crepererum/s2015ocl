@@ -1,6 +1,7 @@
 # generic CMake setup
 cmake_minimum_required (VERSION 3.0)
 include (ExternalProject)
+set (CMAKE_EXPORT_COMPILE_COMMANDS 1)
 
 # project metadata
 project (s2015ocl)
