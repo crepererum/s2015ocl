@@ -86,6 +86,7 @@ externalproject_add (
     CMAKE_ARGS -DCMAKE_INSTALL_PREFIX:PATH=<INSTALL_DIR> -DNANOGUI_BUILD_SHARED=OFF -DNANOGUI_BUILD_EXAMPLE=OFF -DNANOGUI_BUILD_PYTHON=OFF
     INSTALL_COMMAND
         ${CMAKE_COMMAND} -E copy_directory <SOURCE_DIR>/include <INSTALL_DIR>/include
+        && ${CMAKE_COMMAND} -E copy <SOURCE_DIR>/ext/nanovg/src/nanovg.h <INSTALL_DIR>/include/nanovg.h
         && ${CMAKE_COMMAND} -E copy_directory <SOURCE_DIR>/ext/eigen/Eigen <INSTALL_DIR>/include/Eigen
         && ${CMAKE_COMMAND} -E copy <BINARY_DIR>/libnanogui.a <INSTALL_DIR>/lib/libnanogui.a
     TEST_COMMAND ""
