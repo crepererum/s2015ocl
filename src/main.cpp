@@ -1,6 +1,6 @@
 #include <cstdlib>
 
-#include <functional>
+#include <chrono>
 #include <fstream>
 #include <iostream>
 #include <streambuf>
@@ -15,6 +15,7 @@
 #include <CL/cl2.hpp>
 
 #include "common.hpp"
+#include "audio.hpp"
 #include "gui.hpp"
 
 
@@ -67,6 +68,9 @@ int main() {
     // config
     std::size_t n = 16;
     std::size_t m = 4;
+    std::size_t reduction_size = 1;
+    std::size_t sample_rate = 44100;
+    std::size_t nsamples = 1000;
 
 
     // shard host storage
@@ -79,6 +83,8 @@ int main() {
     auto hFrequencies = std::make_shared<std::vector<float>>(m, 0.f);
     auto hTexture = std::make_shared<std::vector<unsigned char>>(n * n * 4, 0);
     auto hColors = std::make_shared<std::vector<float>>(m * 4, 0.f);
+    auto hBuffer = std::vector<float>(nsamples, 0.f);
+    auto audiobuffer = std::make_shared<std::queue<std::vector<float>>>();
 
     log->info() << "prefill data";
     (*hColors)[0] = 1.f;
@@ -131,6 +137,8 @@ int main() {
     (*hRules)[RIDX_OTHER(m, 0, 0, 1, 1)] = 100.f;
     (*hRules)[RIDX_BASE(m, 1)] = -0.8f;
 
+    (*hFrequencies)[0] = 400.f;
+
     log->info() << "set up OpenCL";
 
     log->debug() << "get platform data";
@@ -155,8 +163,11 @@ int main() {
     log->debug() << "build program";
     cl::Program programAutomaton = buildProgramFromFile("automaton.cl", context, devices);
     cl::Program programVisualize = buildProgramFromFile("visualize.cl", context, devices);
+    cl::Program programRender = buildProgramFromFile("render.cl", context, devices);
     cl::Kernel kernelAutomaton(programAutomaton, "automaton");
     cl::Kernel kernelVisualize(programVisualize, "visualize");
+    cl::Kernel kernelRender(programRender, "render");
+    cl::Kernel kernelReduce(programRender, "reduce");
 
     log->debug() << "allocate buffers";
     // TODO: lock global mutex to enable running this while other components are already active
@@ -166,53 +177,117 @@ int main() {
     cl::Buffer dFrequencies(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(cl_float) * hFrequencies->size(), hFrequencies->data());
     cl::Buffer dTexture(context, CL_MEM_WRITE_ONLY, sizeof(cl_char) * hTexture->size());
     cl::Buffer dColors(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(cl_float) * hColors->size(), hColors->data());
+    cl::Buffer dBuffer0(context, CL_MEM_READ_WRITE, sizeof(cl_float) * n * n * nsamples / reduction_size);
+    cl::Buffer dBuffer1(context, CL_MEM_READ_WRITE, sizeof(cl_float) * n * n * nsamples / reduction_size);
 
     log->debug() << "set kernel args";
     kernelAutomaton.setArg(2, dRules);
     kernelVisualize.setArg(1, dTexture);
     kernelVisualize.setArg(2, dColors);
     kernelVisualize.setArg(3, static_cast<cl_uint>(m));
+    kernelRender.setArg(1, dFrequencies);
+    kernelRender.setArg(3, static_cast<cl_uint>(m));
+    kernelRender.setArg(5, static_cast<cl_uint>(nsamples));
+    kernelRender.setArg(6, static_cast<cl_uint>(sample_rate));
+    kernelRender.setArg(7, static_cast<cl_uint>(reduction_size));
+    kernelRender.setArg(8, sizeof(cl_float) * nsamples, nullptr);
+    kernelReduce.setArg(2, static_cast<cl_uint>(nsamples));
+    kernelReduce.setArg(3, static_cast<cl_uint>(2));
+    kernelReduce.setArg(4, sizeof(cl_float) * nsamples, nullptr);
 
     log->debug() << "create command queue";
     cl::CommandQueue queue(context, devices[0]);
 
     log->info() << "spawn GUI thread";
-    std::thread thread_gui(main_gui, n, m, std::cref(mGlobal), std::cref(hTexture), std::cref(shutdown));
+    std::thread thread_gui(main_gui, n, m, mGlobal, hTexture, shutdown);
+
+    log->info() << "spawn audio thread";
+    std::thread thread_audio(main_audio, sample_rate, mGlobal, shutdown, audiobuffer);
 
     log->info() << "run kernel loop";
     bool flipflop = false;
+    float t = 0.f;
     while (!(*shutdown)) {
-        log->debug() << "set kernel args";
-        if (flipflop) {
-            kernelAutomaton.setArg(0, dState0);
-            kernelAutomaton.setArg(1, dState1);
-            kernelVisualize.setArg(0, dState1);
-        } else {
-            kernelAutomaton.setArg(0, dState1);
-            kernelAutomaton.setArg(1, dState0);
-            kernelVisualize.setArg(0, dState0);
-        }
-
-        log->debug() << "run automaton kernel";
-        queue.enqueueNDRangeKernel(kernelAutomaton, cl::NullRange, cl::NDRange(n, n, m));
-
-        log->debug() << "run visualization kernel";
-        queue.enqueueNDRangeKernel(kernelVisualize, cl::NullRange, cl::NDRange(n, n));
-
-        log->debug() << "sync with device";
-        queue.finish();
-
+        // check if the audiobuffer is not overfull
+        bool place_in_buffer;
         {
-            log->debug() << "download visualization";
+            log->debug() << "queck audiobuffer status";
             std::lock_guard<std::mutex> guard(*mGlobal);
-            queue.enqueueReadBuffer(dTexture, true, 0, sizeof(char) * hTexture->size(), hTexture->data());
+            place_in_buffer = audiobuffer->size() * nsamples < sample_rate * 0.5;
         }
 
-        flipflop = !flipflop;
+        if (place_in_buffer) {
+            log->debug() << "set kernel args";
+            if (flipflop) {
+                kernelAutomaton.setArg(0, dState0);
+                kernelAutomaton.setArg(1, dState1);
+                kernelVisualize.setArg(0, dState1);
+                kernelRender.setArg(0, dState1);
+            } else {
+                kernelAutomaton.setArg(0, dState1);
+                kernelAutomaton.setArg(1, dState0);
+                kernelVisualize.setArg(0, dState0);
+                kernelRender.setArg(0, dState0);
+            }
+            kernelRender.setArg(4, t);
+
+            log->debug() << "run automaton kernel";
+            queue.enqueueNDRangeKernel(kernelAutomaton, cl::NullRange, cl::NDRange(n, n, m));
+
+            log->debug() << "run visualization kernel";
+            queue.enqueueNDRangeKernel(kernelVisualize, cl::NullRange, cl::NDRange(n, n));
+
+            log->debug() << "run render kernel";
+            std::size_t to_reduce = n * n / reduction_size;
+            bool flipflop2 = true;
+            kernelRender.setArg(2, dBuffer0);
+            queue.enqueueNDRangeKernel(kernelRender, cl::NullRange, cl::NDRange(to_reduce), cl::NDRange(1, 1));
+
+            log->debug() << "run reduction kernel";
+            // TODO: too slow, reimplement
+            /*while (to_reduce > 16 * 8) {
+                if (flipflop2) {
+                    kernelReduce.setArg(0, dBuffer0);
+                    kernelReduce.setArg(1, dBuffer1);
+                } else {
+                    kernelReduce.setArg(0, dBuffer1);
+                    kernelReduce.setArg(1, dBuffer0);
+                }
+                std::size_t to_reduce_new = to_reduce / 2;
+                queue.enqueueNDRangeKernel(kernelReduce, cl::NullRange, cl::NDRange(to_reduce_new), cl::NDRange(1, 1));
+
+                to_reduce = to_reduce_new;
+                flipflop2 = !flipflop2;
+            }*/
+
+            log->debug() << "sync with device";
+            queue.finish();
+
+            {
+                log->debug() << "download visualization and rendered audio data";
+                std::lock_guard<std::mutex> guard(*mGlobal);
+                queue.enqueueReadBuffer(dTexture, false, 0, sizeof(char) * hTexture->size(), hTexture->data());
+                if (flipflop2) {
+                    queue.enqueueReadBuffer(dBuffer0, false, 0, sizeof(float) * hBuffer.size(), hBuffer.data());
+                } else {
+                    queue.enqueueReadBuffer(dBuffer1, false, 0, sizeof(float) * hBuffer.size(), hBuffer.data());
+                }
+
+                queue.finish();
+                audiobuffer->push(hBuffer);
+            }
+
+            flipflop = !flipflop;
+            t += static_cast<float>(nsamples) / static_cast<float>(sample_rate);
+        } else {
+            log->debug() << "audiobuffer full -> sleep";
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
     }
 
     log->info() << "join threads";
     thread_gui.join();
+    thread_audio.join();
 
     log->info() << "done, goodbye!";
     return EXIT_SUCCESS;

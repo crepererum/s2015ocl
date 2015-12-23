@@ -88,6 +88,7 @@ externalproject_add (
         ${CMAKE_COMMAND} -E copy_directory <SOURCE_DIR>/include <INSTALL_DIR>/include
         && ${CMAKE_COMMAND} -E copy <SOURCE_DIR>/ext/nanovg/src/nanovg.h <INSTALL_DIR>/include/nanovg.h
         && ${CMAKE_COMMAND} -E copy_directory <SOURCE_DIR>/ext/eigen/Eigen <INSTALL_DIR>/include/Eigen
+        && ${CMAKE_COMMAND} -E copy_directory <SOURCE_DIR>/ext/glfw/include/GLFW <INSTALL_DIR>/include/GLFW
         && ${CMAKE_COMMAND} -E copy <BINARY_DIR>/libnanogui.a <INSTALL_DIR>/lib/libnanogui.a
     TEST_COMMAND ""
 )
@@ -120,6 +121,8 @@ target_link_libraries (
     GL
     nanogui
     OpenCL
+    pulse
+    pulse-simple
     rt
     X11
     Xcursor

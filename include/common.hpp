@@ -4,6 +4,7 @@
 #include <exception>
 #include <memory>
 #include <mutex>
+#include <queue>
 #include <string>
 #include <vector>
 
@@ -16,6 +17,10 @@ using shared_mem_t = std::shared_ptr<std::vector<T>>;
 
 template <typename T>
 using shared_atomic_t = std::shared_ptr<std::atomic<T>>;
+
+// TODO: use lock-free queue instead
+template <typename T>
+using shared_buffer_t = std::shared_ptr<std::queue<std::vector<T>>>;
 
 class MyException : public std::exception {
     public:
