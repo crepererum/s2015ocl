@@ -60,6 +60,13 @@ cl::Program buildProgramFromFile(const std::string& fname, const cl::Context& co
     return program;
 }
 
+float getEventTimeMS(const cl::Event& evt) {
+    evt.wait();
+    cl_ulong t_start = evt.getProfilingInfo<CL_PROFILING_COMMAND_START>();
+    cl_ulong t_end = evt.getProfilingInfo<CL_PROFILING_COMMAND_END>();
+    return static_cast<float>(t_end - t_start) / (1000.f * 1000.f);
+}
+
 int main() {
     // set up logging
     auto log = spdlog::stdout_logger_mt("main");
@@ -68,9 +75,9 @@ int main() {
     // config
     std::size_t n = 16;
     std::size_t m = 4;
-    std::size_t reduction_size = 1;
+    std::size_t reduction_size = 16;
     std::size_t sample_rate = 44100;
-    std::size_t nsamples = 1000;
+    std::size_t nsamples = 1024;
 
 
     // shard host storage
@@ -109,8 +116,8 @@ int main() {
 #define RIDX_BASE(m, l) ((m) * (m) * 9 + (l))
 
     // copy level 0 to down right
-    (*hRules)[RIDX_OTHER(m, 0, -1, 0, 0)] = 0.00001f;
-    (*hRules)[RIDX_OTHER(m, -1, 0, 0, 0)] = 0.00004f;
+    (*hRules)[RIDX_OTHER(m, 0, -1, 0, 0)] = 0.001f;
+    (*hRules)[RIDX_OTHER(m, -1, 0, 0, 0)] = 0.004f;
     (*hRules)[RIDX_OTHER(m, 0, 0, 0, 0)] = 1.f;
 
     // if there is some level 1 in my neighborhood, wipe level 0
@@ -187,7 +194,6 @@ int main() {
     kernelVisualize.setArg(3, static_cast<cl_uint>(m));
     kernelRender.setArg(1, dFrequencies);
     kernelRender.setArg(3, static_cast<cl_uint>(m));
-    kernelRender.setArg(5, static_cast<cl_uint>(nsamples));
     kernelRender.setArg(6, static_cast<cl_uint>(sample_rate));
     kernelRender.setArg(7, static_cast<cl_uint>(reduction_size));
     kernelRender.setArg(8, sizeof(cl_float) * nsamples, nullptr);
@@ -196,7 +202,7 @@ int main() {
     kernelReduce.setArg(4, sizeof(cl_float) * nsamples, nullptr);
 
     log->debug() << "create command queue";
-    cl::CommandQueue queue(context, devices[0]);
+    cl::CommandQueue queue(context, devices[0], cl::QueueProperties::Profiling);
 
     log->info() << "spawn GUI thread";
     std::thread thread_gui(main_gui, n, m, mGlobal, hTexture, shutdown);
@@ -207,6 +213,7 @@ int main() {
     log->info() << "run kernel loop";
     bool flipflop = false;
     float t = 0.f;
+    std::size_t profiling_counter = 0;
     while (!(*shutdown)) {
         // check if the audiobuffer is not overfull
         bool place_in_buffer;
@@ -231,17 +238,25 @@ int main() {
             }
             kernelRender.setArg(4, t);
 
+            log->debug() << "prepare profiling";
+            queue.finish();
+            cl::Event evt_automaton;
+            cl::Event evt_visualize;
+            cl::Event evt_render;
+
             log->debug() << "run automaton kernel";
-            queue.enqueueNDRangeKernel(kernelAutomaton, cl::NullRange, cl::NDRange(n, n, m));
+            queue.enqueueNDRangeKernel(kernelAutomaton, cl::NullRange, cl::NDRange(n, n, m), cl::NullRange, nullptr, &evt_automaton);
 
             log->debug() << "run visualization kernel";
-            queue.enqueueNDRangeKernel(kernelVisualize, cl::NullRange, cl::NDRange(n, n));
+            queue.enqueueNDRangeKernel(kernelVisualize, cl::NullRange, cl::NDRange(n, n), cl::NullRange, nullptr, &evt_visualize);
 
             log->debug() << "run render kernel";
-            std::size_t to_reduce = n * n / reduction_size;
+            std::size_t current_size = n * n / reduction_size;
             bool flipflop2 = true;
+            constexpr std::size_t render_shared_size = 32;
             kernelRender.setArg(2, dBuffer0);
-            queue.enqueueNDRangeKernel(kernelRender, cl::NullRange, cl::NDRange(to_reduce), cl::NDRange(1, 1));
+            kernelRender.setArg(5, static_cast<cl_uint>(nsamples / render_shared_size));
+            queue.enqueueNDRangeKernel(kernelRender, cl::NullRange, cl::NDRange(current_size, render_shared_size), cl::NDRange(1, render_shared_size), nullptr, &evt_render);
 
             log->debug() << "run reduction kernel";
             // TODO: too slow, reimplement
@@ -279,6 +294,10 @@ int main() {
 
             flipflop = !flipflop;
             t += static_cast<float>(nsamples) / static_cast<float>(sample_rate);
+            profiling_counter = (profiling_counter + 1) % 1000;
+            if (profiling_counter == 0) {
+                log->info() << "Profiling data: automaton=" << getEventTimeMS(evt_automaton) << "ms visualize=" << getEventTimeMS(evt_visualize) << "ms render=" << getEventTimeMS(evt_render) << "ms";
+            }
         } else {
             log->debug() << "audiobuffer full -> sleep";
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
