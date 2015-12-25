@@ -26,6 +26,12 @@ static_assert(sizeof(cl_uchar) == sizeof(unsigned char), "sizeof(cl_uchar) != si
 static_assert(sizeof(cl_uchar4) == 4 * sizeof(cl_uchar), "sizeof(cl_uchar4) != 4 * sizeof(cl_uchar)");
 
 
+constexpr bool is_power_of_2(std::size_t v) {
+    // see https://graphics.stanford.edu/~seander/bithacks.html#DetermineIfPowerOf2
+    return v && !(v & (v - 1));
+}
+
+
 // install backward handler
 namespace backward {
 backward::SignalHandling sh;
@@ -78,6 +84,13 @@ int main() {
     std::size_t reduction_size = 16;
     std::size_t sample_rate = 44100;
     std::size_t nsamples = 1024;
+
+
+    // check config
+    myassert(is_power_of_2(m), "m must be power of 2");
+    myassert(is_power_of_2(n), "n must be power of 2");
+    myassert(is_power_of_2(reduction_size), "reduction_size must be power of 2");
+    myassert(is_power_of_2(nsamples), "nsamples must be power of 2");
 
 
     // shard host storage
