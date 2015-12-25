@@ -28,29 +28,34 @@ __kernel void render(__constant float* state, __constant float* frequencies, __g
 
     // linear write-back, uses memory coalescing
     const uint base_buffer = get_group_id(0) * nsamples * get_local_size(1) + get_local_id(1);
-    const uint buffer_end = nsamples * get_local_size(1);
+    const uint samples_end = nsamples * get_local_size(1);
     const float norm = 1.f / (float)(reduction_size);
-    for (uint sample = 0; sample < buffer_end; sample += get_local_size(1)) {
+    for (uint sample = 0; sample < samples_end; sample += get_local_size(1)) {
         buffer[base_buffer + sample] = samples[get_local_id(1) + sample] * norm;
     }
 }
 
 __kernel void reduce(__constant float* buffer_in, __global float* buffer_out, uint nsamples, uint reduction_size, __local float* samples) {
+    const uint samples_base = get_local_id(1) * nsamples;
     for (uint sample = 0; sample < nsamples; ++sample) {
-        samples[sample] = 0.f;
+        samples[samples_base + sample] = 0.f;
     }
+    barrier(CLK_LOCAL_MEM_FENCE);
 
-    uint base_out = get_global_id(0) * nsamples;
-    uint base_in = base_out * reduction_size;
+    const uint samples_end = nsamples * get_local_size(1);
+    uint base_in = get_group_id(0) * nsamples * get_local_size(1) * reduction_size + get_local_id(1);
     for (uint e = 0; e < reduction_size; ++e) {
-        for (uint sample = 0; sample < nsamples; ++sample) {
-            samples[sample] += buffer_in[base_in + sample];
+        for (uint sample = 0; sample < samples_end; sample += get_local_size(1)) {
+            samples[get_local_id(1) + sample] += buffer_in[base_in + sample];
         }
-        base_in += nsamples;
+        base_in += samples_end;
     }
+    barrier(CLK_LOCAL_MEM_FENCE);
 
-    float norm = 1.f / (float)(reduction_size);
-    for (uint sample = 0; sample < nsamples; ++sample) {
-        buffer_out[base_out + sample] = samples[sample] * norm;
+    // linear write-back, uses memory coalescing
+    const uint base_buffer = get_group_id(0) * nsamples * get_local_size(1) + get_local_id(1);
+    const float norm = 1.f / (float)(reduction_size);
+    for (uint sample = 0; sample < samples_end; sample += get_local_size(1)) {
+        buffer_out[base_buffer + sample] = samples[get_local_id(1) + sample] * norm;
     }
 }

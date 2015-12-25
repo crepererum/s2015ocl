@@ -98,18 +98,22 @@ int main() {
     (*hColors)[1] = 0.f;
     (*hColors)[2] = 0.f;
     (*hColors)[3] = 1.f;
+
     (*hColors)[4] = 0.f;
     (*hColors)[5] = 1.f;
     (*hColors)[6] = 0.f;
     (*hColors)[7] = 1.f;
-    (*hColors)[8] = 0.f;
+
+    (*hColors)[8] = 0.2f;
     (*hColors)[9] = 0.f;
     (*hColors)[10] = 1.f;
     (*hColors)[11] = 1.f;
+
     (*hColors)[12] = 0.5f;
     (*hColors)[13] = 0.5f;
     (*hColors)[14] = 0.5f;
     (*hColors)[15] = 1.f;
+
     (*hState)[0] = 1.f;
 
 #define RIDX_OTHER(m, dx, dy, ltarget, lsource) ((m) * (m) * (((dx) + 1) + 3 * ((dy) + 1)) + (m) * (ltarget) + (lsource))
@@ -144,7 +148,16 @@ int main() {
     (*hRules)[RIDX_OTHER(m, 0, 0, 1, 1)] = 100.f;
     (*hRules)[RIDX_BASE(m, 1)] = -0.8f;
 
+    // 1 -> 2 star
+    (*hRules)[RIDX_OTHER(m, 0, 0, 2, 2)] = 1.f;
+    (*hRules)[RIDX_OTHER(m, -1, -1, 2, 1)] = 0.002f;
+    (*hRules)[RIDX_OTHER(m, 1, -1, 2, 1)] = 0.002f;
+    (*hRules)[RIDX_OTHER(m, -1, 1, 2, 1)] = 0.002f;
+    (*hRules)[RIDX_OTHER(m, 1, 1, 2, 1)] = 0.002f;
+
     (*hFrequencies)[0] = 400.f;
+    (*hFrequencies)[1] = 200.f;
+    (*hFrequencies)[2] = 600.f;
 
     log->info() << "set up OpenCL";
 
@@ -197,8 +210,6 @@ int main() {
     kernelRender.setArg(6, static_cast<cl_uint>(sample_rate));
     kernelRender.setArg(7, static_cast<cl_uint>(reduction_size));
     kernelRender.setArg(8, sizeof(cl_float) * nsamples, nullptr);
-    kernelReduce.setArg(2, static_cast<cl_uint>(nsamples));
-    kernelReduce.setArg(3, static_cast<cl_uint>(2));
     kernelReduce.setArg(4, sizeof(cl_float) * nsamples, nullptr);
 
     log->debug() << "create command queue";
@@ -243,6 +254,7 @@ int main() {
             cl::Event evt_automaton;
             cl::Event evt_visualize;
             cl::Event evt_render;
+            std::vector<cl::Event> evts_reduce;
 
             log->debug() << "run automaton kernel";
             queue.enqueueNDRangeKernel(kernelAutomaton, cl::NullRange, cl::NDRange(n, n, m), cl::NullRange, nullptr, &evt_automaton);
@@ -260,7 +272,7 @@ int main() {
 
             log->debug() << "run reduction kernel";
             // TODO: too slow, reimplement
-            /*while (to_reduce > 16 * 8) {
+            while (current_size > 1) {
                 if (flipflop2) {
                     kernelReduce.setArg(0, dBuffer0);
                     kernelReduce.setArg(1, dBuffer1);
@@ -268,12 +280,16 @@ int main() {
                     kernelReduce.setArg(0, dBuffer1);
                     kernelReduce.setArg(1, dBuffer0);
                 }
-                std::size_t to_reduce_new = to_reduce / 2;
-                queue.enqueueNDRangeKernel(kernelReduce, cl::NullRange, cl::NDRange(to_reduce_new), cl::NDRange(1, 1));
+                std::size_t current_reduction_size = 2;
+                std::size_t current_size_new = current_size / current_reduction_size;
+                evts_reduce.push_back(cl::Event());
+                kernelReduce.setArg(2, static_cast<cl_uint>(nsamples / render_shared_size));
+                kernelReduce.setArg(3, static_cast<cl_uint>(current_reduction_size));
+                queue.enqueueNDRangeKernel(kernelReduce, cl::NullRange, cl::NDRange(current_size_new, render_shared_size), cl::NDRange(1, render_shared_size), nullptr, &evts_reduce.back());
 
-                to_reduce = to_reduce_new;
+                current_size = current_size_new;
                 flipflop2 = !flipflop2;
-            }*/
+            }
 
             log->debug() << "sync with device";
             queue.finish();
@@ -296,7 +312,11 @@ int main() {
             t += static_cast<float>(nsamples) / static_cast<float>(sample_rate);
             profiling_counter = (profiling_counter + 1) % 1000;
             if (profiling_counter == 0) {
-                log->info() << "Profiling data: automaton=" << getEventTimeMS(evt_automaton) << "ms visualize=" << getEventTimeMS(evt_visualize) << "ms render=" << getEventTimeMS(evt_render) << "ms";
+                float t_reduce = 0.f;
+                for (const auto& evt : evts_reduce) {
+                    t_reduce += getEventTimeMS(evt);
+                }
+                log->info() << "Profiling data: automaton=" << getEventTimeMS(evt_automaton) << "ms visualize=" << getEventTimeMS(evt_visualize) << "ms render=" << getEventTimeMS(evt_render) << "ms reduce=" << t_reduce << "ms";
             }
         } else {
             log->debug() << "audiobuffer full -> sleep";
